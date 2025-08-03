@@ -3,86 +3,59 @@ import axios from "axios";
 import cors from "cors";
 import dotenv from "dotenv";
 import xml2js from "xml2js";
-import { MongoClient } from 'mongodb';
-// import postRoutes from '../server/routers/postRoutes.js';
-import RssFeed from './schema/APISchema.js';
-import crypto from 'crypto';
-import router from './controllers/postController.js';
+import { MongoClient } from "mongodb";
+import crypto from "crypto";
+import router from "./controllers/postController.js";
 
 dotenv.config();
 
 const app = express();
 
-
-// CORS configuration
 app.use(cors({
-  origin: '*', // Be cautious with this in production
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
-// Test route
-app.get('/test', (req, res) => {
-  res.json({ message: 'API is working!' });
-});
-
-// Routes
-app.use('/api/posts', router);
-
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-// Routes
-// app.use('/api/posts', postRoutes);
 
-// New route to handle user data submission
-// app.post('/api/user-data', async (req, res) => {
-//   const userData = req.body; // Expecting user data in the request body
-
-//   if (!userData || typeof userData !== 'object') {
-//     return res.status(400).json({ success: false, message: "Invalid user data." });
-//   }
-
-//   try {
-//     // Connect to MongoDB
-//     await client.connect();
-//     const db = client.db('coins'); // Replace with your database name
-//     const collection = db.collection('blogdb'); // Replace with your collection name
-
-//     // Insert the user data
-//     const result = await collection.insertOne(userData);
-//     res.status(201).json({ success: true, message: "User data stored successfully", data: result.ops[0] });
-//   } catch (error) {
-//     console.error("Error storing user data:", error);
-//     res.status(500).json({ success: false, message: "Error storing user data", error: error.message });
-//   } finally {
-//     // Close the connection
-//     await client.close();
-//   }
-// });
-
-const connectionString ="mongodb://localhost:27017/news" ;  // Ensure this is defined
+const connectionString = process.env.MONGODB_URI || "mongodb+srv://harshgupta0028:M028663@cluster0.fucrcoy.mongodb.net/coins?retryWrites=true&w=majority&appName=Cluster0";
 if (!connectionString) {
-    throw new Error("MongoDB connection string is not defined.");
+  throw new Error("MongoDB connection string is not defined in .env file.");
 }
-const client = new MongoClient(connectionString);
+
+let client;
 let db;
 
-// Connect to MongoDB
 async function connectToDatabase() {
-  try {
-    console.log("Attempting to connect to MongoDB...");
+  if (!client || !client.topology || !client.topology.isConnected()) {
+    client = new MongoClient(connectionString, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
     await client.connect();
-    db = client.db('harshgupta'); // Replace with your database name
-    console.log("Connected to MongoDB successfully");
-  } catch (error) {
-    console.error("Failed to connect to MongoDB:", error);
+    console.log("Connected to MongoDB Atlas with user: harshgupta0028");
   }
+  db = client.db("coins");
+  return db;
 }
 
+process.on("SIGTERM", async () => {
+  if (client) {
+    await client.close();
+    console.log("MongoDB connection closed");
+  }
+  process.exit(0);
+});
 
-// Helper function for API requests
+app.get("/test", (req, res) => {
+  res.json({ message: "API is working!" });
+});
+
+app.use("/api/posts", router);
+
 async function makeApiRequest(url) {
-  // Check if the URL is valid before making the request
-  if (!url.includes('apikey') || !url.includes('q')) {
+  if (!url.includes("apikey") || !url.includes("q")) {
     return {
       status: 400,
       success: false,
@@ -90,10 +63,9 @@ async function makeApiRequest(url) {
       error: "API key and query parameter 'q' are required.",
     };
   }
-  
   try {
     const response = await axios.get(url);
-    console.log("API response data:", response.data);
+    console.log("API response received");
     return {
       status: 200,
       success: true,
@@ -101,12 +73,12 @@ async function makeApiRequest(url) {
       data: response.data.results,
     };
   } catch (error) {
-    console.error("API request error:", error.response ? error.response.data : error);
+    console.error("API request error:", error.message);
     return {
       status: 500,
       success: false,
       message: "Failed to fetch data from the API",
-      error: error.response ? error.response.data : error.message,
+      error: error.message,
       apiErrorMessage: error.response?.data?.results?.message || error.message,
     };
   }
@@ -114,40 +86,37 @@ async function makeApiRequest(url) {
 
 app.get("/all-news", async (req, res) => {
   try {
-    // Fetch data from the API
-    const apiUrl = 'https://newsdata.io/api/1/news?apikey=pub_59933f2b9e474711aac0b2ef00ea887d4ff09&q=crypto%20market&category=business,technology';
-  //  const apiUrl='https://gnews.io/api/v4/search?q=crypto&apikey=de835f501509fb7f1394d9503333ee60'
-   
+    const apiUrl =
+      "https://newsdata.io/api/1/news?apikey=pub_59933f2b9e474711aac0b2ef00ea887d4ff09&q=crypto%20market&category=business,technology";
     const response = await axios.get(apiUrl);
-    const newsData = response.data.results; // Assuming the data is in the 'results' field
+    const newsData = response.data.results;
+    console.log(`Fetched ${newsData.length} news items`);
 
-    // Connect to MongoDB
-    await client.connect();
-    console.log("Connected to MongoDB");
+    const db = await connectToDatabase();
+    const collection = db.collection("coinscap");
+    const result = await collection.insertMany(newsData, { ordered: false });
+    console.log(`Inserted ${result.insertedCount} documents into coinscap`);
 
-    // Select the database and collection
-    const db = client.db('coins'); // Ensure this matches your database name
-    const collection = db.collection('coinscap'); // Replace with your collection name
-   
-
-    // Insert the JSON data
-    const result = await collection.insertMany(newsData);
-    console.log(`${result.insertedCount} documents were inserted`);
-
-    res.status(200).json({ success: true, message: `${result.insertedCount} documents were inserted`, data: newsData });
+    res.status(200).json({
+      success: true,
+      message: `${result.insertedCount} documents were inserted`,
+      data: newsData,
+    });
   } catch (error) {
-    console.error("Error fetching or inserting data:", error);
-    res.status(500).json({ success: false, message: "Error fetching or inserting data", error: error.message });
-  } finally {
-    // Close the connection
-    await client.close();
+    console.error("Error in /all-news:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching or inserting data",
+      error: error.message,
+    });
   }
 });
 
 app.get("/fetch-rss", async (req, res) => {
-  const rssUrl = req.query.url || 'https://cryptoslate.com/feed/';
-  const page = parseInt(req.query.page) || 1; // Default to page 1
-  const limit = parseInt(req.query.limit) || 10; // Default to 10 items per page
+  const rssUrl = req.query.url || "https://cryptoslate.com/feed/";
+  const collectionName = req.query.collection || "rssfeeds";
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
 
   if (!rssUrl) {
     return res.status(400).json({ success: false, message: "RSS feed URL is required." });
@@ -158,22 +127,27 @@ app.get("/fetch-rss", async (req, res) => {
     const parser = new xml2js.Parser();
     parser.parseString(response.data, async (err, result) => {
       if (err) {
-        return res.status(500).json({ success: false, message: "Failed to parse XML", error: err });
+        console.error("XML parsing error:", err);
+        return res.status(500).json({ success: false, message: "Failed to parse XML", error: err.message });
       }
 
-      // Transform RSS items into the desired format
-      const items = result.rss.channel[0].item.map(item => ({
+      if (!result.rss || !result.rss.channel || !result.rss.channel[0].item) {
+        console.error("No items found in RSS feed:", rssUrl);
+        return res.status(200).json({ success: true, message: "No items in RSS feed", data: [], totalItems: 0 });
+      }
+
+      const items = result.rss.channel[0].item.map((item) => ({
         article_id: generateArticleId(item.link[0]),
-        title: item.title[0],
+        title: item.title[0] || "Untitled",
         link: item.link[0],
         keywords: null,
-        creator: item['dc:creator'] ? [item['dc:creator'][0]] : null,
+        creator: item["dc:creator"] ? [item["dc:creator"][0] || "Unknown"] : ["Unknown"],
         video_url: null,
-        description: item.description ? stripHtmlTags(item.description[0]) : null,
-        content: item['content:encoded'] ? stripHtmlTags(item['content:encoded'][0]) : null,
-        pubDate: formatDate(item.pubDate[0]),
+        description: item.description ? stripHtmlTags(item.description[0]) : "No description available",
+        content: item["content:encoded"] ? stripHtmlTags(item["content:encoded"][0]) : null,
+        pubDate: formatDate(item.pubDate[0]) || new Date().toISOString(),
         pubDateTZ: "UTC",
-        image_url: extractImageUrl(item),
+        image_url: extractImageUrl(item) || "/default.png?height=200&width=400&text=News",
         source_id: generateSourceId(rssUrl),
         source_priority: Math.floor(Math.random() * 1000000) + 1000,
         source_name: result.rss.channel[0].title[0],
@@ -184,86 +158,85 @@ app.get("/fetch-rss", async (req, res) => {
         category: ["cryptocurrency"],
         ai_tag: ["crypto news"],
         ai_region: null,
-        ai_org: null
+        ai_org: null,
       }));
 
-      // Implement pagination
       const startIndex = (page - 1) * limit;
       const endIndex = startIndex + limit;
       const paginatedItems = items.slice(startIndex, endIndex);
 
-      // Connect to MongoDB
-      await client.connect();
-      const db = client.db('coins'); // Your database name
-      const collection = db.collection('rssfeeds');
+      const db = await connectToDatabase();
+      const collection = db.collection(collectionName);
 
-      // Insert the items, avoiding duplicates based on title and pubDate
       for (const item of paginatedItems) {
         try {
-          const existingItem = await collection.findOne({ 
-            title: item.title, 
-            pubDate: item.pubDate 
+          const existingItem = await collection.findOne({
+            title: item.title,
+            pubDate: item.pubDate,
           });
           if (!existingItem) {
             await collection.insertOne(item);
-            console.log(`Inserted article: ${item.title}`);
+            console.log(`Inserted article: ${item.title} into ${collectionName}`);
           } else {
-            console.log(`Duplicate article found: ${item.title}`);
+            console.log(`Duplicate article found: ${item.title} in ${collectionName}`);
           }
         } catch (error) {
-          console.error('Error inserting article:', error);
+          console.error(`Failed to insert article ${item.title} into ${collectionName}:`, error.message);
+          throw error;
         }
       }
 
       res.status(200).json({
         success: true,
-        message: "Fetched and processed RSS feed items",
+        message: `Fetched and processed RSS feed items from ${rssUrl}`,
         data: paginatedItems,
         totalItems: items.length,
         currentPage: page,
-        totalPages: Math.ceil(items.length / limit)
+        totalPages: Math.ceil(items.length / limit),
       });
     });
   } catch (error) {
-    console.error("Error fetching RSS feed:", error);
+    console.error("Error in /fetch-rss:", error.message);
     res.status(500).json({
-      status: "error",
+      success: false,
       message: "Failed to fetch RSS feed",
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 app.get("/fetch-another-rss", async (req, res) => {
-  const rssUrl = req.query.url || 'https://www.newsbtc.com/feed/'; 
-  const page = parseInt(req.query.page) || 1; // Default to page 1
-  const limit = parseInt(req.query.limit) || 10; // Default to 10 items per page
-
-  if (!rssUrl) {
-    return res.status(400).json({ success: false, message: "RSS feed URL is required." });
-  }
+  const rssUrl = "https://www.newsbtc.com/feed/";
+  const collectionName = "rssfeeds1";
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 5;
 
   try {
     const response = await axios.get(rssUrl);
     const parser = new xml2js.Parser();
     parser.parseString(response.data, async (err, result) => {
       if (err) {
-        return res.status(500).json({ success: false, message: "Failed to parse XML", error: err });
+        console.error("XML parsing error:", err);
+        return res.status(500).json({ success: false, message: "Failed to parse XML", error: err.message });
       }
 
-      // Transform RSS items into the desired format
-      const items = result.rss.channel[0].item.map(item => ({
+      if (!result.rss || !result.rss.channel || !result.rss.channel[0].item) {
+        console.error("No items found in RSS feed:", rssUrl);
+        return res.status(200).json({ success: true, message: "No items in RSS feed", data: [], totalItems: 0 });
+      }
+
+      const items = result.rss.channel[0].item.map((item) => ({
         article_id: generateArticleId(item.link[0]),
-        title: item.title[0],
+        title: item.title[0] || "Untitled",
         link: item.link[0],
         keywords: null,
-        creator: item['dc:creator'] ? [item['dc:creator'][0]] : null,
+        creator: item["dc:creator"] ? [item["dc:creator"][0] || "Unknown"] : ["Unknown"],
         video_url: null,
-        description: item.description ? stripHtmlTags(item.description[0]) : null,
-        content: item['content:encoded'] ? stripHtmlTags(item['content:encoded'][0]) : null,
-        pubDate: formatDate(item.pubDate[0]),
+        description: item.description ? stripHtmlTags(item.description[0]) : "No description available",
+        content: item["content:encoded"] ? stripHtmlTags(item["content:encoded"][0]) : null,
+        pubDate: formatDate(item.pubDate[0]) || new Date().toISOString(),
         pubDateTZ: "UTC",
-        image_url: extractImageUrl(item),
+        image_url: extractImageUrl(item) || "/default.png?height=200&width=400&text=News",
         source_id: generateSourceId(rssUrl),
         source_priority: Math.floor(Math.random() * 1000000) + 1000,
         source_name: result.rss.channel[0].title[0],
@@ -274,162 +247,218 @@ app.get("/fetch-another-rss", async (req, res) => {
         category: ["cryptocurrency"],
         ai_tag: ["crypto news"],
         ai_region: null,
-        ai_org: null
+        ai_org: null,
       }));
 
-      // Implement pagination
       const startIndex = (page - 1) * limit;
       const endIndex = startIndex + limit;
       const paginatedItems = items.slice(startIndex, endIndex);
 
-      // Connect to MongoDB
-      await client.connect();
-      const db = client.db('coins'); // Your database name
-      const collection = db.collection('rssfeeds1');
+      const db = await connectToDatabase();
+      const collection = db.collection(collectionName);
 
-      // Insert the items, avoiding duplicates based on title and pubDate
       for (const item of paginatedItems) {
         try {
-          const existingItem = await collection.findOne({ 
-            title: item.title, 
-            pubDate: item.pubDate 
+          const existingItem = await collection.findOne({
+            title: item.title,
+            pubDate: item.pubDate,
           });
           if (!existingItem) {
             await collection.insertOne(item);
-            console.log(`Inserted article: ${item.title}`);
+            console.log(`Inserted article: ${item.title} into ${collectionName}`);
           } else {
-            console.log(`Duplicate article found: ${item.title}`);
+            console.log(`Duplicate article found: ${item.title} in ${collectionName}`);
           }
         } catch (error) {
-          console.error('Error inserting article:', error);
+          console.error(`Failed to insert article ${item.title} into ${collectionName}:`, error.message);
+          throw error;
         }
       }
 
       res.status(200).json({
         success: true,
-        message: "Fetched and processed RSS feed items",
+        message: `Fetched and processed RSS feed items from ${rssUrl}`,
         data: paginatedItems,
         totalItems: items.length,
         currentPage: page,
-        totalPages: Math.ceil(items.length / limit)
+        totalPages: Math.ceil(items.length / limit),
       });
     });
   } catch (error) {
-    console.error("Error fetching RSS feed:", error);
+    console.error("Error in /fetch-another-rss:", error.message);
     res.status(500).json({
-      status: "error",
+      success: false,
       message: "Failed to fetch RSS feed",
-      error: error.message
+      error: error.message,
     });
   }
 });
 
-// New route to fetch and store data from the NewsBTC RSS feed
-app.get("/fetch-newsbtc-rss", async (req, res) => {
-  const rssUrl = 'https://www.newsbtc.com/feed/';
-  const page = parseInt(req.query.page) || 1; // Default to page 1
-  const limit = parseInt(req.query.limit) || 10; // Default to 10 items per page
-
+app.get("/trending-news", async (req, res) => {
   try {
-    const response = await axios.get(rssUrl);
-    const parser = new xml2js.Parser();
-    parser.parseString(response.data, async (err, result) => {
-      if (err) {
-        return res.status(500).json({ success: false, message: "Failed to parse XML", error: err });
-      }
+    const db = await connectToDatabase();
+    const coinscapCollection = db.collection("coinscap");
+    const rssfeedsCollection = db.collection("rssfeeds");
+    const rssfeeds1Collection = db.collection("rssfeeds1");
 
-      // Transform RSS items into the desired format
-      const items = result.rss.channel[0].item.map(item => ({
-        article_id: generateArticleId(item.link[0]),
-        title: item.title[0],
-        link: item.link[0],
-        keywords: null,
-        creator: item['dc:creator'] ? [item['dc:creator'][0]] : null,
-        video_url: null,
-        description: item.description ? stripHtmlTags(item.description[0]) : null,
-        content: item['content:encoded'] ? stripHtmlTags(item['content:encoded'][0]) : null,
-        pubDate: formatDate(item.pubDate[0]),
-        pubDateTZ: "UTC",
-        image_url: extractImageUrl(item),
-        source_id: generateSourceId(rssUrl),
-        source_priority: Math.floor(Math.random() * 1000000) + 1000,
-        source_name: result.rss.channel[0].title[0],
-        source_url: result.rss.channel[0].link[0],
-        source_icon: null,
-        language: "english",
-        country: ["global"],
-        category: ["cryptocurrency"],
-        ai_tag: ["crypto news"],
-        ai_region: null,
-        ai_org: null
-      }));
+    const coinscapItems = await coinscapCollection
+      .find({})
+      .sort({ pubDate: -1 })
+      .limit(5)
+      .toArray();
+    const rssItems = await rssfeedsCollection
+      .find({})
+      .sort({ pubDate: -1 })
+      .limit(5)
+      .toArray();
+    const rssItems1 = await rssfeeds1Collection
+      .find({})
+      .sort({ pubDate: -1 })
+      .limit(5)
+      .toArray();
 
-      // Implement pagination
-      const startIndex = (page - 1) * limit;
-      const endIndex = startIndex + limit;
-      const paginatedItems = items.slice(startIndex, endIndex);
+    const trendingItems = [...coinscapItems, ...rssItems, ...rssItems1]
+      .map(item => ({
+        title: item.title || "Untitled",
+        description: item.description || item.content || "No description available",
+        creator: [item.author || (item.creator && item.creator[0]) || "Unknown"],
+        pubDate: item.pubDate || new Date().toISOString(),
+        image_url: item.image_url || item.image || "/default.png?height=200&width=400&text=News",
+      }))
+      .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
+      .slice(0, 5);
 
-      // Connect to MongoDB
-      await client.connect();
-      const db = client.db('coins'); // Your database name
-      const collection = db.collection('newsbtc_rssfeeds'); // New collection for NewsBTC RSS feeds
+    console.log(`Fetched ${trendingItems.length} trending news items`);
 
-      // Insert the items, avoiding duplicates based on title and pubDate
-      for (const item of paginatedItems) {
-        try {
-          const existingItem = await collection.findOne({ 
-            title: item.title, 
-            pubDate: item.pubDate 
-          });
-          if (!existingItem) {
-            await collection.insertOne(item);
-            console.log(`Inserted article: ${item.title}`);
-          } else {
-            console.log(`Duplicate article found: ${item.title}`);
-          }
-        } catch (error) {
-          console.error('Error inserting article:', error);
-        }
-      }
-
-      res.status(200).json({
-        success: true,
-        message: "Fetched and processed NewsBTC RSS feed items",
-        data: paginatedItems,
-        totalItems: items.length,
-        currentPage: page,
-        totalPages: Math.ceil(items.length / limit)
-      });
+    res.status(200).json({
+      success: true,
+      message: "Fetched trending news items",
+      data: trendingItems,
     });
   } catch (error) {
-    console.error("Error fetching NewsBTC RSS feed:", error);
+    console.error("Error in /trending-news:", error.message);
     res.status(500).json({
-      status: "error",
-      message: "Failed to fetch NewsBTC RSS feed",
-      error: error.message
+      success: false,
+      message: "Error fetching trending news",
+      error: error.message,
     });
   }
 });
 
-// Helper functions
+app.get("/blogs", (req, res) => {
+  const blogs = [
+    {
+      title: "Comprehensive Guide To Crafting A Metaverse Avatar",
+      description: "In the fascinating realm of the metaverse, crafting a digital avatar is key to translating your virtual identity...",
+      author: "Contributor Author",
+      date: "April 16, 2024",
+      image: "/web3.png?height=200&width=400&text=Metaverse",
+    },
+    // ... other blog entries ...
+  ];
+  res.status(200).json({ success: true, data: blogs });
+});
+
+app.get("/check-oplog", async (req, res) => {
+  try {
+    const db = await connectToDatabase();
+    const stats = await db.collection("oplog.rs").stats();
+    res.status(200).json({ success: true, oplogSize: stats.size / (1024 * 1024) + " MB" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get("/clear-old-rss", async (req, res) => {
+  try {
+    const db = await connectToDatabase();
+    const collections = ["rssfeeds", "rssfeeds1"];
+    for (const coll of collections) {
+      const result = await db.collection(coll).deleteMany({
+        pubDate: { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+      });
+      console.log(`Deleted ${result.deletedCount} old items from ${coll}`);
+    }
+    res.status(200).json({ success: true, message: "Cleared old RSS data" });
+  } catch (error) {
+    console.error("Error clearing old data:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get("/backup-rss", async (req, res) => {
+  try {
+    const db = await connectToDatabase();
+    const collections = ["rssfeeds", "rssfeeds1"];
+    const backup = {};
+    for (const coll of collections) {
+      backup[coll] = await db.collection(coll).find({}).toArray();
+    }
+    res.status(200).json({ success: true, data: backup });
+  } catch (error) {
+    console.error("Backup error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/", async (req, res) => {
+  const { urls } = req.body;
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "Invalid input. Please provide an array of URLs." });
+  }
+  try {
+    const jsonData = await fetchRssToJson(urls);
+    if (!Array.isArray(jsonData) || jsonData.length === 0) {
+      return res.status(400).json({ error: "No valid data to insert." });
+    }
+    const db = await connectToDatabase();
+    const collection = db.collection("rssfeeds");
+    const result = await collection.insertMany(jsonData, { ordered: false });
+    res.json({ success: true, insertedCount: result.insertedCount, data: jsonData });
+  } catch (error) {
+    console.error("Error saving RSS data to MongoDB:", error.message);
+    res.status(500).json({ error: "An error occurred while processing the feeds.", details: error.message });
+  }
+});
+
+async function fetchRssToJson(urls) {
+  const jsonResults = [];
+  const rssFeedUrl = "https://thedefiant.io/feed/";
+  urls.push(rssFeedUrl);
+  const db = await connectToDatabase();
+  const collection = db.collection("rssfeeds");
+  for (const url of urls) {
+    try {
+      const response = await axios.get(url, { timeout: 10000 });
+      const xml = response.data;
+      const result = await xml2js.parseStringPromise(xml);
+      jsonResults.push(result);
+      await collection.insertOne(result);
+      console.log(`1 document was inserted for URL: ${url}`);
+    } catch (error) {
+      console.error(`Error fetching or parsing ${url}:`, error.message);
+    }
+  }
+  return jsonResults;
+}
+
 function generateArticleId(url) {
- return crypto.createHash('md5').update(url + Date.now()).digest('hex'); 
+  return crypto.createHash("md5").update(url + Date.now()).digest("hex");
 }
 
 function formatDate(dateStr) {
-  return new Date(dateStr).toISOString().replace('T', ' ').slice(0, 19);
+  return new Date(dateStr).toISOString().replace("T", " ").slice(0, 19);
 }
 
 function extractImageUrl(item) {
-  if (item['media:content']) {
-    return item['media:content'][0].$.url;
+  if (item["media:content"]) {
+    return item["media:content"][0].$.url;
   }
   if (item.enclosure) {
     return item.enclosure[0].$.url;
   }
-  // Try to extract from content if available
-  if (item['content:encoded']) {
-    const content = item['content:encoded'][0];
+  if (item["content:encoded"]) {
+    const content = item["content:encoded"][0];
     const imgMatch = content.match(/<img[^>]+src="([^">]+)"/);
     if (imgMatch) {
       return imgMatch[1];
@@ -439,327 +468,37 @@ function extractImageUrl(item) {
 }
 
 function generateSourceId(url) {
-  // Extract domain name from URL and use it as source_id
   try {
     const domain = new URL(url).hostname
-      .replace('www.', '')
-      .replace('.com', '')
-      .replace('.org', '')
-      .replace(/\./g, '_');
+      .replace("www.", "")
+      .replace(".com", "")
+      .replace(".org", "")
+      .replace(/\./g, "_");
     return domain.toLowerCase();
   } catch {
-    return 'unknown_source';
+    return "unknown_source";
   }
 }
 
-function detectLanguage(text) {
-  // Simple language detection - you might want to use a proper language detection library
-  // This is just a basic example
-  return "english"; // Default to English for now
-}
-
-// Function to fetch and convert RSS to JSON
-async function fetchRssToJson(urls) {
-    const jsonResults = [];
-
-    // Add the RSS feed URL
-    const rssFeedUrl = 'https://thedefiant.io/feed/';
-    urls.push(rssFeedUrl); // Include the RSS feed URL in the list
-
-    for (const url of urls) {
-        try {
-            const response = await axios.get(url, { timeout: 10000 });
-            const xml = response.data;
-            const result = await xml2js.parseStringPromise(xml);
-            jsonResults.push(result);
-
-            // Connect to MongoDB
-            await client.connect();
-            console.log("Connected to MongoDB");
-
-            // Select the database and collection
-            const db = client.db('coins'); // Ensure this matches your database name
-            const collection = db.collection('rssfeeds'); // Replace with your collection name
-
-            // Insert the parsed RSS data
-            const insertResult = await collection.insertOne(result);
-            console.log(`1 document was inserted for URL: ${url}`);
-        } catch (error) {
-            console.error(`Error fetching or parsing ${url}:`, error);
-        }
-    }
-
-    return jsonResults;
-}
-
-// API endpoint to convert RSS feeds to JSON and save to MongoDB
-app.post('/', async (req, res) => {
-    const { urls } = req.body; // Expecting an array of URLs in the request body
-
-    if (!urls || !Array.isArray(urls) || urls.length === 0) {
-        return res.status(400).json({ error: 'Invalid input. Please provide an array of URLs.' });
-    }
-
-    try {
-        const jsonData = await fetchRssToJson(urls);
-
-        // Check if jsonData is an array and has valid objects
-        if (!Array.isArray(jsonData) || jsonData.length === 0) {
-            return res.status(400).json({ error: 'No valid data to insert.' });
-        }
-
-        // Log the data to be inserted for debugging
-        console.log("Inserting JSON data into MongoDB:", JSON.stringify(jsonData, null, 2));
-
-        // Save data to MongoDB using the RssFeed model
-        const result = await RssFeed.insertMany(jsonData); // Use the RssFeed model to insert the JSON data
-
-        res.json({ success: true, insertedCount: result.length, data: result });
-    } catch (error) {
-        console.error("Error saving RSS data to MongoDB:", error);
-        res.status(500).json({ error: 'An error occurred while processing the feeds.', details: error.message });
-    }
-});
-
-// Function to refresh RSS feeds
-async function refreshRssFeeds() {
-  const defaultRssUrls = [
-    'https://cryptoslate.com/feed/',
-    // 'https://thedefiant.io/feed/'
-  ];
-
-  let mongoClient = null;
-  try {
-    // Create a single MongoDB connection outside the loop
-    mongoClient = new MongoClient(connectionString);
-    await mongoClient.connect();
-    const db = mongoClient.db('coins');
-    const collection = db.collection('rssfeeds');
-    
-    console.log('Refreshing RSS feeds...');
-    for (const url of defaultRssUrls) {
-      try {
-        const response = await axios.get(url);
-        const parser = new xml2js.Parser();
-        const result = await new Promise((resolve, reject) => {
-          parser.parseString(response.data, (err, result) => {
-            if (err) reject(err);
-            else resolve(result);
-          });
-        });
-
-        // Transform RSS items into the desired format
-        const items = result.rss.channel[0].item.map(item => ({
-          article_id: generateArticleId(item.link[0]),
-          title: item.title[0],
-          link: item.link[0],
-          keywords: null,
-          creator: item['dc:creator'] ? [item['dc:creator'][0]] : null,
-          video_url: null,
-          description: item.description ? stripHtmlTags(item.description[0]) : null,
-          content: item['content:encoded'] ? stripHtmlTags(item['content:encoded'][0]) : null,
-          pubDate: formatDate(item.pubDate[0]),
-          pubDateTZ: "UTC",
-          image_url: extractImageUrl(item),
-          source_id: generateSourceId(url),
-          source_priority: Math.floor(Math.random() * 1000000) + 1000,
-          source_name: result.rss.channel[0].title[0],
-          source_url: result.rss.channel[0].link[0],
-          source_icon: null,
-          language: "english",
-          country: ["global"],
-          category: ["cryptocurrency"],
-          ai_tag: ["crypto news"],
-          ai_region: null,
-          ai_org: null
-        }));
-
-        // Insert the items, avoiding duplicates based on title and pubDate
-        for (const item of items) {
-          try {
-            const existingItem = await collection.findOne({ 
-              title: item.title, 
-              pubDate: item.pubDate 
-            });
-            if (!existingItem) {
-              await collection.insertOne(item);
-              console.log(`Inserted article: ${item.title}`);
-            } else {
-              console.log(`Duplicate article found: ${item.title}`);
-            }
-          } catch (error) {
-            console.error('Error inserting article:', error);
-          }
-        }
-      } catch (error) {
-        console.error(`Error refreshing RSS feed for ${url}:`, error);
-      }
-    }
-  } catch (error) {
-    console.error('Error in refresh cycle:', error);
-  } finally {
-    // Close connection only once after all operations are complete
-    if (mongoClient) {
-      await mongoClient.close();
-    }
-  }
-}
-
-// New endpoint to fetch dummy blog data
-app.get("/blogs", (req, res) => {
-  // Dummy blog data
-  const blogs = [
-    {
-      title: "Comprehensive Guide To Crafting A Metaverse Avatar",
-      description: "In the fascinating realm of the metaverse, crafting a digital avatar is key to translating your virtual identity...",
-      author: "Contributor Author",
-      date: "April 16, 2024",
-      image: "/web3.png?height=200&width=400&text=Metaverse"
-    },
-    {
-      title: "Why Crypto Investment Is More Accessible Than Ever",
-      description: "It's been a mere few years to be a cryptocurrency user. Not only are we seeing the expanding...",
-      author: "Contributor Author",
-      date: "April 09, 2024",
-      image: "/web3_1.png?height=200&width=400&text=Crypto+Investment"
-    },
-    {
-      title: "10 Most Popular Cryptocurrency Lawyers Of 2024",
-      description: "While more and more people are investing in cryptocurrencies...",
-      author: "Contributor Author",
-      date: "April 19, 2024",
-      image: "/web3_2.png?height=200&width=400&text=Crypto+Lawyers"
-    },
-    {
-      title: "Meme Coins In Sharp Decline Post BTC Flash Crash",
-      description: "Meme-based digital assets often experience sharp fluctuations, mirroring the...",
-      author: "David Ayton",
-      date: "March 21, 2024",
-      image: "/image.png?height=200&width=400&text=Bitcoin+Crash"
-    },
-    {
-      title: "4 Ways To Keep Your Business Building Protected At All Times",
-      description: "It doesn't matter what kind of business you run, safety is always going to be...",
-      author: "Tracy D'Souza",
-      date: "March 16, 2024",
-      image: "/trd1.png?height=200&width=400&text=Business+Security"
-    },
-    {
-      title: "Unveiling The Ethereum Dencun Upgrade: A Stepping Stone Towards Scalability",
-      description: "Ethereum, the prominent platform for decentralized applications...",
-      author: "Rozan Khan",
-      date: "March 15, 2024",
-      image: "/trd2.png?height=200&width=400&text=Ethereum+Upgrade"
-    }
-  ];
-
-  res.status(200).json({ success: true, data: blogs });
-});
-
-// Existing route to handle fetching posts
-app.get('/api/posts', async (req, res) => {
-  try {
-    await client.connect();
-    const db = client.db('coins'); // Ensure this matches your database name
-    const collection = db.collection('adminPosts'); // Ensure this matches your collection name
-
-    const posts = await collection.find({}).toArray(); // Fetch all posts
-    res.status(200).json({ success: true, data: posts });
-  } catch (error) {
-    console.error("Error fetching posts:", error);
-    res.status(500).json({ success: false, message: "Error fetching posts", error: error.message });
-  } finally {
-    await client.close();
-  }
-});
-
-// Existing route to handle creating posts
-app.post('/api/posts', async (req, res) => {
-  const adminData = req.body; // Expecting admin data in the request body
-
-  console.log("Received data for creating post:", adminData); // Log the received data
-
-  if (!adminData || typeof adminData !== 'object') {
-    return res.status(400).json({ success: false, message: "Invalid admin data." });
-  }
-
-  try {
-    await client.connect();
-    const db = client.db('coins'); // Ensure this matches your database name
-    const collection = db.collection('adminPosts'); // Ensure this matches your collection name for admin posts
-
-    const result = await collection.insertOne(adminData);
-    res.status(201).json({ success: true, message: "Admin data stored successfully", data: result.ops[0] });
-  } catch (error) {
-    console.error("Error storing admin data:", error);
-    res.status(500).json({ success: false, message: "Error storing admin data", error: error.message });
-  } finally {
-    await client.close();
-  }
-});
-
-// New route to handle search across all collections
-app.get('/api/search', async (req, res) => {
-  const { query } = req.query; // Get the search query from the request
-
-  if (!query) {
-    return res.status(400).json({ success: false, message: "Search query is required." });
-  }
-
-  try {
-    console.log("Connecting to MongoDB...");
-    await client.connect();
-    const db = client.db('coins'); // Ensure this matches your database name
-
-    // Get all collection names
-    const collections = await db.listCollections().toArray();
-    const searchResults = [];
-
-    console.log(`Searching for query: ${query} in all collections`);
-    for (const collectionInfo of collections) {
-      const collection = db.collection(collectionInfo.name);
-      const results = await collection.find({
-        $or: [
-          { title: { $regex: query, $options: 'i' } }, // Case-insensitive search
-          { description: { $regex: query, $options: 'i' } }
-        ]
-      }).toArray();
-
-      if (results.length > 0) {
-        searchResults.push({ collection: collectionInfo.name, results });
-      }
-    }
-
-    console.log(`Found results in ${searchResults.length} collections`);
-    res.status(200).json({ success: true, data: searchResults });
-  } catch (error) {
-    console.error("Error performing search:", error);
-    res.status(500).json({ success: false, message: "Error performing search", error: error.message });
-  } finally {
-    console.log("Closing MongoDB connection...");
-    await client.close();
-  }
-});
-
-// Start the server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, async () => {
-    await connectToDatabase(); // Connect to MongoDB before starting the server
-    console.log(`Server is running on http://localhost:${PORT}`);
-});
-
-// Add this helper function with the other helper functions
 function stripHtmlTags(html) {
   if (!html) return null;
-  // Remove HTML tags and decode HTML entities
   return html
-    .replace(/<[^>]*>/g, '') // Remove HTML tags
-    .replace(/&nbsp;/g, ' ') // Replace &nbsp; with space
-    .replace(/&amp;/g, '&') // Replace &amp; with &
-    .replace(/&lt;/g, '<') // Replace &lt; with <
-    .replace(/&gt;/g, '>') // Replace &gt; with >
-    .replace(/&quot;/g, '"') // Replace &quot; with "
-    .trim(); // Remove leading/trailing whitespace
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .trim();
 }
 
-
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, async () => {
+  try {
+    await connectToDatabase();
+    console.log(`Server is running on http://localhost:${PORT}`);
+  } catch (error) {
+    console.error("Failed to start server:", error.message);
+    process.exit(1);
+  }
+});
