@@ -11,8 +11,9 @@ dotenv.config();
 
 const app = express();
 
+// Enable CORS for your frontend's origin
 app.use(cors({
-  origin: "*",
+  origin: ["http://localhost:3000", "https://coin-delta-olive.vercel.app"], // Add your deployed frontend URL
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
@@ -34,7 +35,7 @@ async function connectToDatabase() {
       useUnifiedTopology: true,
     });
     await client.connect();
-    console.log("Connected to MongoDB Atlas with user: harshgupta0028");
+    console.log("Connected to MongoDB Atlas");
   }
   db = client.db("coins");
   return db;
@@ -52,46 +53,28 @@ app.get("/test", (req, res) => {
   res.json({ message: "API is working!" });
 });
 
-app.use("/api/posts", router);
-
-async function makeApiRequest(url) {
-  if (!url.includes("apikey") || !url.includes("q")) {
-    return {
-      status: 400,
-      success: false,
-      message: "Invalid request parameters",
-      error: "API key and query parameter 'q' are required.",
-    };
-  }
+// Proxy endpoint for CoinCap API to bypass CORS
+app.get("/proxy-coincap", async (req, res) => {
   try {
-    const response = await axios.get(url, {
+    const response = await axios.get("https://api.coincap.io/v2/assets/", {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.5'
       },
-      timeout: 10000
+      timeout: 10000,
     });
-    console.log("API response received");
-    return {
-      status: 200,
-      success: true,
-      message: "Successfully fetched the data",
-      data: response.data.results,
-    };
+    res.json(response.data);
   } catch (error) {
-    console.error("API request error:", error.message);
-    console.error("Response:", error.response?.data);
-    console.error("Headers:", error.response?.headers);
-    return {
-      status: error.response?.status || 500,
+    console.error("Error in /proxy-coincap:", error.message);
+    res.status(error.response?.status || 500).json({
       success: false,
-      message: "Failed to fetch data from the API",
+      message: "Failed to fetch CoinCap data",
       error: error.message,
-      apiErrorMessage: error.response?.data?.results?.message || error.message,
-    };
+    });
   }
-}
+});
+
+app.use("/api/posts", router);
 
 app.get("/all-news", async (req, res) => {
   try {
@@ -101,9 +84,8 @@ app.get("/all-news", async (req, res) => {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.5'
       },
-      timeout: 10000
+      timeout: 10000,
     });
     const newsData = response.data.results;
     console.log(`Fetched ${newsData.length} news items`);
@@ -120,13 +102,10 @@ app.get("/all-news", async (req, res) => {
     });
   } catch (error) {
     console.error("Error in /all-news:", error.message);
-    console.error("Response:", error.response?.data);
-    console.error("Headers:", error.response?.headers);
     res.status(500).json({
       success: false,
       message: "Error fetching or inserting data",
       error: error.message,
-      responseData: error.response?.data
     });
   }
 });
@@ -137,97 +116,86 @@ app.get("/fetch-rss", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
 
-  if (!rssUrl) {
-    return res.status(400).json({ success: false, message: "RSS feed URL is required." });
-  }
-
   try {
-    const response = await axios.get(rssUrl, {
+    const proxyUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
+    const response = await axios.get(proxyUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/rss+xml, application/xml, text/xml',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive'
+        'Accept': 'application/json',
       },
-      timeout: 10000
+      timeout: 10000,
     });
-    const parser = new xml2js.Parser();
-    parser.parseString(response.data, async (err, result) => {
-      if (err) {
-        console.error("XML parsing error:", err);
-        return res.status(500).json({ success: false, message: "Failed to parse XML", error: err.message });
-      }
 
-      if (!result.rss || !result.rss.channel || !result.rss.channel[0].item) {
-        console.error("No items found in RSS feed:", rssUrl);
-        return res.status(200).json({ success: true, message: "No items in RSS feed", data: [], totalItems: 0 });
-      }
+    const feed = response.data;
+    if (feed.status !== "ok") {
+      console.error("RSS2JSON error:", feed.message);
+      return res.status(500).json({ success: false, message: "Failed to fetch RSS feed via proxy", error: feed.message });
+    }
 
-      const items = result.rss.channel[0].item.map((item) => ({
-        article_id: generateArticleId(item.link[0]),
-        title: item.title[0] || "Untitled",
-        link: item.link[0],
-        keywords: null,
-        creator: item["dc:creator"] ? [item["dc:creator"][0] || "Unknown"] : ["Unknown"],
-        video_url: null,
-        description: item.description ? stripHtmlTags(item.description[0]) : "No description available",
-        content: item["content:encoded"] ? stripHtmlTags(item["content:encoded"][0]) : null,
-        pubDate: formatDate(item.pubDate[0]) || new Date().toISOString(),
-        pubDateTZ: "UTC",
-        image_url: extractImageUrl(item) || "/default.png?height=200&width=400&text=News",
-        source_id: generateSourceId(rssUrl),
-        source_priority: Math.floor(Math.random() * 1000000) + 1000,
-        source_name: result.rss.channel[0].title[0],
-        source_url: result.rss.channel[0].link[0],
-        source_icon: null,
-        language: "english",
-        country: ["global"],
-        category: ["cryptocurrency"],
-        ai_tag: ["crypto news"],
-        ai_region: null,
-        ai_org: null,
-      }));
+    if (!feed.items || feed.items.length === 0) {
+      console.error("No items found in RSS feed:", rssUrl);
+      return res.status(200).json({ success: true, message: "No items in RSS feed", data: [], totalItems: 0 });
+    }
 
-      const startIndex = (page - 1) * limit;
-      const endIndex = startIndex + limit;
-      const paginatedItems = items.slice(startIndex, endIndex);
+    const items = feed.items.map((item) => ({
+      article_id: generateArticleId(item.link),
+      title: item.title || "Untitled",
+      link: item.link,
+      keywords: item.categories || null,
+      creator: item.author ? [item.author] : ["Unknown"],
+      video_url: null,
+      description: item.description ? stripHtmlTags(item.description) : "No description available",
+      content: item.content ? stripHtmlTags(item.content) : null,
+      pubDate: formatDate(item.pubDate) || new Date().toISOString(),
+      pubDateTZ: "UTC",
+      image_url: item.thumbnail || "https://placehold.co/300x200?text=News",
+      source_id: generateSourceId(rssUrl),
+      source_priority: Math.floor(Math.random() * 1000000) + 1000,
+      source_name: feed.feed.title || "CryptoSlate",
+      source_url: feed.feed.link || rssUrl,
+      source_icon: null,
+      language: "english",
+      country: ["global"],
+      category: ["cryptocurrency"],
+      ai_tag: ["crypto news"],
+      ai_region: null,
+      ai_org: null,
+    }));
 
-      const db = await connectToDatabase();
-      const collection = db.collection(collectionName);
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedItems = items.slice(startIndex, endIndex);
 
-      for (const item of paginatedItems) {
-        try {
-          const existingItem = await collection.findOne({ link: item.link });
-          if (!existingItem) {
-            await collection.insertOne(item);
-            console.log(`Inserted article: ${item.title} into ${collectionName}`);
-          } else {
-            console.log(`Duplicate article found: ${item.title} in ${collectionName}`);
-          }
-        } catch (error) {
-          console.error(`Failed to insert article ${item.title} into ${collectionName}:`, error.message);
-          throw error;
-        }
-      }
+    const db = await connectToDatabase();
+    const collection = db.collection(collectionName);
 
-      res.status(200).json({
-        success: true,
-        message: `Fetched and processed RSS feed items from ${rssUrl}`,
-        data: paginatedItems,
-        totalItems: items.length,
-        currentPage: page,
-        totalPages: Math.ceil(items.length / limit),
-      });
+    const existingLinks = new Set(
+      (await collection.find({ link: { $in: items.map(item => item.link) } })
+        .project({ link: 1 })
+        .toArray())
+      .map(item => item.link)
+    );
+    const newItems = paginatedItems.filter(item => !existingLinks.has(item.link));
+
+    if (newItems.length > 0) {
+      const result = await collection.insertMany(newItems, { ordered: false });
+      console.log(`Inserted ${result.insertedCount} new articles into ${collectionName}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Fetched and processed RSS feed items from ${rssUrl}`,
+      data: paginatedItems,
+      totalItems: items.length,
+      currentPage: page,
+      totalPages: Math.ceil(items.length / limit),
     });
   } catch (error) {
     console.error("Error in /fetch-rss:", error.message);
-    console.error("Response:", error.response?.data);
-    console.error("Headers:", error.response?.headers);
     res.status(500).json({
       success: false,
       message: "Failed to fetch RSS feed",
       error: error.message,
-      responseData: error.response?.data
     });
   }
 });
@@ -239,17 +207,12 @@ app.get("/fetch-another-rss", async (req, res) => {
   const limit = parseInt(req.query.limit) || 5;
 
   try {
-    // Optional: Use proxy if 403 persists
-    // const proxyUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
-    // const response = await axios.get(proxyUrl, { headers: { 'User-Agent': '...' } });
     const response = await axios.get(rssUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/rss+xml, application/xml, text/xml',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive'
       },
-      timeout: 10000
+      timeout: 10000,
     });
     const parser = new xml2js.Parser();
     parser.parseString(response.data, async (err, result) => {
@@ -274,7 +237,7 @@ app.get("/fetch-another-rss", async (req, res) => {
         content: item["content:encoded"] ? stripHtmlTags(item["content:encoded"][0]) : null,
         pubDate: formatDate(item.pubDate[0]) || new Date().toISOString(),
         pubDateTZ: "UTC",
-        image_url: extractImageUrl(item) || "/default.png?height=200&width=400&text=News",
+        image_url: extractImageUrl(item) || "https://placehold.co/300x200?text=News",
         source_id: generateSourceId(rssUrl),
         source_priority: Math.floor(Math.random() * 1000000) + 1000,
         source_name: result.rss.channel[0].title[0],
@@ -295,19 +258,17 @@ app.get("/fetch-another-rss", async (req, res) => {
       const db = await connectToDatabase();
       const collection = db.collection(collectionName);
 
-      for (const item of paginatedItems) {
-        try {
-          const existingItem = await collection.findOne({ link: item.link });
-          if (!existingItem) {
-            await collection.insertOne(item);
-            console.log(`Inserted article: ${item.title} into ${collectionName}`);
-          } else {
-            console.log(`Duplicate article found: ${item.title} in ${collectionName}`);
-          }
-        } catch (error) {
-          console.error(`Failed to insert article ${item.title} into ${collectionName}:`, error.message);
-          throw error;
-        }
+      const existingLinks = new Set(
+        (await collection.find({ link: { $in: items.map(item => item.link) } })
+          .project({ link: 1 })
+          .toArray())
+        .map(item => item.link)
+      );
+      const newItems = paginatedItems.filter(item => !existingLinks.has(item.link));
+
+      if (newItems.length > 0) {
+        const result = await collection.insertMany(newItems, { ordered: false });
+        console.log(`Inserted ${result.insertedCount} new articles into ${collectionName}`);
       }
 
       res.status(200).json({
@@ -321,13 +282,10 @@ app.get("/fetch-another-rss", async (req, res) => {
     });
   } catch (error) {
     console.error("Error in /fetch-another-rss:", error.message);
-    console.error("Response:", error.response?.data);
-    console.error("Headers:", error.response?.headers);
     res.status(500).json({
       success: false,
       message: "Failed to fetch RSS feed",
       error: error.message,
-      responseData: error.response?.data
     });
   }
 });
@@ -361,7 +319,7 @@ app.get("/trending-news", async (req, res) => {
         description: item.description || item.content || "No description available",
         creator: [item.author || (item.creator && item.creator[0]) || "Unknown"],
         pubDate: item.pubDate || new Date().toISOString(),
-        image_url: item.image_url || item.image || "/default.png?height=200&width=400&text=News",
+        image_url: item.image_url || item.image || "https://placehold.co/300x200?text=News",
       }))
       .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
       .slice(0, 5);
@@ -390,7 +348,7 @@ app.get("/blogs", (req, res) => {
       description: "In the fascinating realm of the metaverse, crafting a digital avatar is key to translating your virtual identity...",
       author: "Contributor Author",
       date: "April 16, 2024",
-      image: "/web3.png?height=200&width=400&text=Metaverse",
+      image: "https://placehold.co/300x200?text=Metaverse",
     },
   ];
   res.status(200).json({ success: true, data: blogs });
@@ -470,9 +428,8 @@ async function fetchRssToJson(urls) {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
           'Accept': 'application/rss+xml, application/xml, text/xml',
-          'Accept-Language': 'en-US,en;q=0.5'
         },
-        timeout: 10000
+        timeout: 10000,
       });
       const xml = response.data;
       const result = await xml2js.parseStringPromise(xml);
@@ -481,8 +438,6 @@ async function fetchRssToJson(urls) {
       console.log(`1 document was inserted for URL: ${url}`);
     } catch (error) {
       console.error(`Error fetching or parsing ${url}:`, error.message);
-      console.error("Response:", error.response?.data);
-      console.error("Headers:", error.response?.headers);
     }
   }
   return jsonResults;
@@ -538,7 +493,7 @@ function stripHtmlTags(html) {
     .trim();
 }
 
-const PORT = process.env.PORT || 10000; // Updated to match Render logs
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, async () => {
   try {
     await connectToDatabase();
