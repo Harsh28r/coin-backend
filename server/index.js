@@ -64,7 +64,14 @@ async function makeApiRequest(url) {
     };
   }
   try {
-    const response = await axios.get(url);
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.5'
+      },
+      timeout: 10000
+    });
     console.log("API response received");
     return {
       status: 200,
@@ -74,8 +81,10 @@ async function makeApiRequest(url) {
     };
   } catch (error) {
     console.error("API request error:", error.message);
+    console.error("Response:", error.response?.data);
+    console.error("Headers:", error.response?.headers);
     return {
-      status: 500,
+      status: error.response?.status || 500,
       success: false,
       message: "Failed to fetch data from the API",
       error: error.message,
@@ -88,7 +97,14 @@ app.get("/all-news", async (req, res) => {
   try {
     const apiUrl =
       "https://newsdata.io/api/1/news?apikey=pub_59933f2b9e474711aac0b2ef00ea887d4ff09&q=crypto%20market&category=business,technology";
-    const response = await axios.get(apiUrl);
+    const response = await axios.get(apiUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.5'
+      },
+      timeout: 10000
+    });
     const newsData = response.data.results;
     console.log(`Fetched ${newsData.length} news items`);
 
@@ -104,10 +120,13 @@ app.get("/all-news", async (req, res) => {
     });
   } catch (error) {
     console.error("Error in /all-news:", error.message);
+    console.error("Response:", error.response?.data);
+    console.error("Headers:", error.response?.headers);
     res.status(500).json({
       success: false,
       message: "Error fetching or inserting data",
       error: error.message,
+      responseData: error.response?.data
     });
   }
 });
@@ -123,7 +142,15 @@ app.get("/fetch-rss", async (req, res) => {
   }
 
   try {
-    const response = await axios.get(rssUrl);
+    const response = await axios.get(rssUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/rss+xml, application/xml, text/xml',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive'
+      },
+      timeout: 10000
+    });
     const parser = new xml2js.Parser();
     parser.parseString(response.data, async (err, result) => {
       if (err) {
@@ -170,10 +197,7 @@ app.get("/fetch-rss", async (req, res) => {
 
       for (const item of paginatedItems) {
         try {
-          const existingItem = await collection.findOne({
-            title: item.title,
-            pubDate: item.pubDate,
-          });
+          const existingItem = await collection.findOne({ link: item.link });
           if (!existingItem) {
             await collection.insertOne(item);
             console.log(`Inserted article: ${item.title} into ${collectionName}`);
@@ -197,10 +221,13 @@ app.get("/fetch-rss", async (req, res) => {
     });
   } catch (error) {
     console.error("Error in /fetch-rss:", error.message);
+    console.error("Response:", error.response?.data);
+    console.error("Headers:", error.response?.headers);
     res.status(500).json({
       success: false,
       message: "Failed to fetch RSS feed",
       error: error.message,
+      responseData: error.response?.data
     });
   }
 });
@@ -212,7 +239,18 @@ app.get("/fetch-another-rss", async (req, res) => {
   const limit = parseInt(req.query.limit) || 5;
 
   try {
-    const response = await axios.get(rssUrl);
+    // Optional: Use proxy if 403 persists
+    // const proxyUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
+    // const response = await axios.get(proxyUrl, { headers: { 'User-Agent': '...' } });
+    const response = await axios.get(rssUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/rss+xml, application/xml, text/xml',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive'
+      },
+      timeout: 10000
+    });
     const parser = new xml2js.Parser();
     parser.parseString(response.data, async (err, result) => {
       if (err) {
@@ -259,10 +297,7 @@ app.get("/fetch-another-rss", async (req, res) => {
 
       for (const item of paginatedItems) {
         try {
-          const existingItem = await collection.findOne({
-            title: item.title,
-            pubDate: item.pubDate,
-          });
+          const existingItem = await collection.findOne({ link: item.link });
           if (!existingItem) {
             await collection.insertOne(item);
             console.log(`Inserted article: ${item.title} into ${collectionName}`);
@@ -286,10 +321,13 @@ app.get("/fetch-another-rss", async (req, res) => {
     });
   } catch (error) {
     console.error("Error in /fetch-another-rss:", error.message);
+    console.error("Response:", error.response?.data);
+    console.error("Headers:", error.response?.headers);
     res.status(500).json({
       success: false,
       message: "Failed to fetch RSS feed",
       error: error.message,
+      responseData: error.response?.data
     });
   }
 });
@@ -354,7 +392,6 @@ app.get("/blogs", (req, res) => {
       date: "April 16, 2024",
       image: "/web3.png?height=200&width=400&text=Metaverse",
     },
-    // ... other blog entries ...
   ];
   res.status(200).json({ success: true, data: blogs });
 });
@@ -429,7 +466,14 @@ async function fetchRssToJson(urls) {
   const collection = db.collection("rssfeeds");
   for (const url of urls) {
     try {
-      const response = await axios.get(url, { timeout: 10000 });
+      const response = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'application/rss+xml, application/xml, text/xml',
+          'Accept-Language': 'en-US,en;q=0.5'
+        },
+        timeout: 10000
+      });
       const xml = response.data;
       const result = await xml2js.parseStringPromise(xml);
       jsonResults.push(result);
@@ -437,13 +481,15 @@ async function fetchRssToJson(urls) {
       console.log(`1 document was inserted for URL: ${url}`);
     } catch (error) {
       console.error(`Error fetching or parsing ${url}:`, error.message);
+      console.error("Response:", error.response?.data);
+      console.error("Headers:", error.response?.headers);
     }
   }
   return jsonResults;
 }
 
 function generateArticleId(url) {
-  return crypto.createHash("md5").update(url + Date.now()).digest("hex");
+  return crypto.createHash("md5").update(url).digest("hex");
 }
 
 function formatDate(dateStr) {
@@ -492,7 +538,7 @@ function stripHtmlTags(html) {
     .trim();
 }
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000; // Updated to match Render logs
 app.listen(PORT, async () => {
   try {
     await connectToDatabase();
