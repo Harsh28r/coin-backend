@@ -11,12 +11,19 @@ dotenv.config();
 
 const app = express();
 
-// Enable CORS for your frontend's origin
+// Enable CORS with explicit preflight handling
 app.use(cors({
-  origin: ["http://localhost:3000", "https://coin-delta-olive.vercel.app"], // Add your deployed frontend URL
+  origin: ["http://localhost:3000", "https://coin-delta-olive.vercel.app"],
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
+
+// Handle preflight OPTIONS requests explicitly
+app.options("*", cors());
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -53,7 +60,7 @@ app.get("/test", (req, res) => {
   res.json({ message: "API is working!" });
 });
 
-// Proxy endpoint for CoinCap API to bypass CORS
+// Proxy endpoint for CoinCap API
 app.get("/proxy-coincap", async (req, res) => {
   try {
     const response = await axios.get("https://api.coincap.io/v2/assets/", {
