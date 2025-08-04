@@ -118,7 +118,7 @@ app.get("/all-news", async (req, res) => {
 });
 
 app.get("/fetch-rss", async (req, res) => {
-  const rssUrl = req.query.url || "https://cryptoslate.com/feed/";
+  const rssUrl = req.query.url || "https://cointelegraph.com/rss";
   const collectionName = req.query.collection || "rssfeeds";
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
@@ -158,7 +158,7 @@ app.get("/fetch-rss", async (req, res) => {
       image_url: item.thumbnail || "https://placehold.co/300x200?text=News",
       source_id: generateSourceId(rssUrl),
       source_priority: Math.floor(Math.random() * 1000000) + 1000,
-      source_name: feed.feed.title || "CryptoSlate",
+      source_name: feed.feed.title || "CoinTelegraph",
       source_url: feed.feed.link || rssUrl,
       source_icon: null,
       language: "english",
@@ -500,7 +500,7 @@ function stripHtmlTags(html) {
     .trim();
 }
 
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
   try {
     await connectToDatabase();
