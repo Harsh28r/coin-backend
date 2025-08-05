@@ -1,26 +1,15 @@
 import express from 'express';
-import {
-  getPosts,
-  createPost,
-  updatePost,
-  deletePost
-} from '../controllers/postController.js';
-import Post from '../models/Post.js';
+import { getPosts, createPost, updatePost, deletePost } from '../controllers/postController';
 
-const router = express.Router();
+const postroutes = express.Router();
 
-// Fetch all posts
-router.get('/', async (req, res) => {
-  try {
-    const posts = await Post.find(); // Fetch posts from MongoDB
-    res.json(posts);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+console.log('Posts routes loaded'); // Debugging log
 
+// Define routes
+Router.get('/', getPosts);
+Router.post('/', createPost);
+Router.put('/:id', updatePost);
+Router.delete('/:id', deletePost);
 
-router.route('/').get(getPosts).post(createPost);
-router.route('/:id').put(updatePost).delete(deletePost);
+export default postroutes;
 
-export default router;
