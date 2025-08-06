@@ -11,38 +11,48 @@ dotenv.config();
 
 const app = express();
 
+// Single MongoDB connection
+let dbConnection;
+async function connectToDatabase() {
+  if (dbConnection) return dbConnection;
+  try {
+    const connectionString =
+      process.env.MONGODB_URI ||
+      'mongodb+srv://harshgupta0028:M028663@cluster0.fucrcoy.mongodb.net/coins?retryWrites=true&w=majority&appName=Cluster0';
+    if (!connectionString) {
+      throw new Error('MongoDB connection string is not defined in .env file.');
+    }
+    await mongoose.connect(connectionString, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 60000,
+    });
+    dbConnection = mongoose.connection.db;
+    console.log('Connected to MongoDB Atlas');
+    // Create text indexes for search
+    await dbConnection.collection('coinscap').createIndex({ title: 'text', description: 'text' });
+    await dbConnection.collection('rssfeeds').createIndex({ title: 'text', description: 'text' });
+    await dbConnection.collection('rssfeeds1').createIndex({ title: 'text', description: 'text' });
+    return dbConnection;
+  } catch (error) {
+    console.error('MongoDB connection error:', error.message);
+    throw error;
+  }
+}
+
 // CORS configuration
-app.use(cors({
-  origin: ['http://localhost:3000', 'https://coin-q86peu5id-harsh28rs-projects.vercel.app'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 204,
-}));
+app.use(
+  cors({
+    origin: ['http://localhost:3000', 'https://coin-q86peu5id-harsh28rs-projects.vercel.app','https://coin-harsh28rs-projects.vercel.app'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    optionsSuccessStatus: 204,
+  })
+);
 app.options('*', cors());
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-
-// MongoDB connection with Mongoose
-const connectionString = process.env.MONGODB_URI || 'mongodb+srv://harshgupta0028:M028663@cluster0.fucrcoy.mongodb.net/coins?retryWrites=true&w=majority&appName=Cluster0';
-if (!connectionString) {
-  throw new Error('MongoDB connection string is not defined in .env file.');
-}
-
-async function connectToDatabase() {
-  try {
-    await mongoose.connect(connectionString, {
-      serverSelectionTimeoutMS: 30000, // 30s timeout
-      socketTimeoutMS: 60000, // 60s socket timeout
-    });
-    console.log('Connected to MongoDB Atlas');
-    return mongoose.connection.db;
-  } catch (error) {
-    console.error('MongoDB connection error:', error.message, error.stack);
-    throw error;
-  }
-}
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
@@ -61,8 +71,9 @@ app.get('/proxy-coincap', async (req, res) => {
   try {
     const response = await axios.get('https://api.coincap.io/v2/assets/', {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        Accept: 'application/json',
       },
       timeout: 10000,
     });
@@ -77,17 +88,42 @@ app.get('/proxy-coincap', async (req, res) => {
   }
 });
 
-// Mount posts routes
-app.use('/posts', postRoutes);
+// Search coins endpoint
+app.get('/search-coins', async (req, res) => {
+  const { query } = req.query;
+  try {
+    const response = await axios.get('https://api.coincap.io/v2/assets', {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        Accept: 'application/json',
+      },
+      timeout: 10000,
+    });
+    const coins = response.data.data;
+    const filteredCoins = query
+      ? coins.filter(
+          (coin) =>
+            coin.name.toLowerCase().includes(query.toLowerCase()) ||
+            coin.symbol.toLowerCase().includes(query.toLowerCase())
+        )
+      : coins;
+    res.json({ success: true, data: filteredCoins });
+  } catch (error) {
+    console.error('Error in /search-coins:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to search coins', error: error.message });
+  }
+});
 
 // News API endpoint
 app.get('/all-news', async (req, res) => {
   try {
-    const apiUrl = 'https://newsdata.io/api/1/news?apikey=pub_59933f2b9e474711aac0b2ef00ea887d4ff09&q=crypto%20market&category=business,technology';
+    const apiUrl = `https://newsdata.io/api/1/news?apikey=${process.env.NEWSDATA_API_KEY}&q=crypto%20market&category=business,technology`;
     const response = await axios.get(apiUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        Accept: 'application/json',
       },
       timeout: 10000,
     });
@@ -96,12 +132,20 @@ app.get('/all-news', async (req, res) => {
 
     const db = await connectToDatabase();
     const collection = db.collection('coinscap');
-    const result = await collection.insertMany(newsData, { ordered: false });
-    console.log(`Inserted ${result.insertedCount} documents into coinscap`);
-
+    const existingLinks = new Set(
+      (await collection.find({ link: { $in: newsData.map((item) => item.link) } }).project({ link: 1 }).toArray()).map(
+        (item) => item.link
+      )
+    );
+    const newItems = newsData.filter((item) => !existingLinks.has(item.link));
+    let insertedCount = 0;
+    if (newItems.length > 0) {
+      const result = await collection.insertMany(newItems, { ordered: false });
+      insertedCount = result.insertedCount;
+    }
     res.status(200).json({
       success: true,
-      message: `${result.insertedCount} documents were inserted`,
+      message: `${insertedCount} documents were inserted`,
       data: newsData,
     });
   } catch (error) {
@@ -111,6 +155,32 @@ app.get('/all-news', async (req, res) => {
       message: 'Error fetching or inserting data',
       error: error.message,
     });
+  }
+});
+
+// Search news endpoint
+app.get('/search-news', async (req, res) => {
+  const { query } = req.query;
+  if (!query) {
+    return res.status(400).json({ success: false, message: 'Query parameter is required' });
+  }
+  try {
+    const apiUrl = `https://newsdata.io/api/1/news?apikey=${process.env.NEWSDATA_API_KEY}&q=${encodeURIComponent(
+      query
+    )}&category=business,technology`;
+    const response = await axios.get(apiUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        Accept: 'application/json',
+      },
+      timeout: 10000,
+    });
+    const newsData = response.data.results;
+    res.status(200).json({ success: true, data: newsData });
+  } catch (error) {
+    console.error('Error in /search-news:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to search news', error: error.message });
   }
 });
 
@@ -125,8 +195,9 @@ app.get('/fetch-rss', async (req, res) => {
     const proxyUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
     const response = await axios.get(proxyUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        Accept: 'application/json',
       },
       timeout: 10000,
     });
@@ -175,9 +246,11 @@ app.get('/fetch-rss', async (req, res) => {
     const collection = db.collection(collectionName);
 
     const existingLinks = new Set(
-      (await collection.find({ link: { $in: items.map(item => item.link) } }).project({ link: 1 }).toArray()).map(item => item.link)
+      (await collection.find({ link: { $in: items.map((item) => item.link) } }).project({ link: 1 }).toArray()).map(
+        (item) => item.link
+      )
     );
-    const newItems = paginatedItems.filter(item => !existingLinks.has(item.link));
+    const newItems = paginatedItems.filter((item) => !existingLinks.has(item.link));
 
     if (newItems.length > 0) {
       const result = await collection.insertMany(newItems, { ordered: false });
@@ -212,8 +285,9 @@ app.get('/fetch-another-rss', async (req, res) => {
   try {
     const response = await axios.get(rssUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/rss+xml, application/xml, text/xml',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        Accept: 'application/rss+xml, application/xml, text/xml',
       },
       timeout: 10000,
     });
@@ -262,9 +336,11 @@ app.get('/fetch-another-rss', async (req, res) => {
       const collection = db.collection(collectionName);
 
       const existingLinks = new Set(
-        (await collection.find({ link: { $in: items.map(item => item.link) } }).project({ link: 1 }).toArray()).map(item => item.link)
+        (await collection.find({ link: { $in: items.map((item) => item.link) } }).project({ link: 1 }).toArray()).map(
+          (item) => item.link
+        )
       );
-      const newItems = paginatedItems.filter(item => !existingLinks.has(item.link));
+      const newItems = paginatedItems.filter((item) => !existingLinks.has(item.link));
 
       if (newItems.length > 0) {
         const result = await collection.insertMany(newItems, { ordered: false });
@@ -303,7 +379,7 @@ app.get('/trending-news', async (req, res) => {
     const rssItems1 = await rssfeeds1Collection.find({}).sort({ pubDate: -1 }).limit(5).toArray();
 
     const trendingItems = [...coinscapItems, ...rssItems, ...rssItems1]
-      .map(item => ({
+      .map((item) => ({
         title: item.title || 'Untitled',
         description: item.description || item.content || 'No description available',
         creator: [item.author || (item.creator && item.creator[0]) || 'Unknown'],
@@ -330,12 +406,90 @@ app.get('/trending-news', async (req, res) => {
   }
 });
 
+// Search database news endpoint
+app.get('/search-db-news', async (req, res) => {
+  const { query, category, startDate, endDate } = req.query;
+  try {
+    const db = await connectToDatabase();
+    const collections = ['coinscap', 'rssfeeds', 'rssfeeds1'];
+    const results = [];
+    for (const coll of collections) {
+      const collection = db.collection(coll);
+      const filter = {};
+      if (query) filter.$text = { $search: query };
+      if (category) filter.category = { $in: [category] };
+      if (startDate || endDate) {
+        filter.pubDate = {};
+        if (startDate) filter.pubDate.$gte = new Date(startDate).toISOString();
+        if (endDate) filter.pubDate.$lte = new Date(endDate).toISOString();
+      }
+      const items = await collection.find(filter).sort({ pubDate: -1 }).limit(10).toArray();
+      results.push(...items);
+    }
+    res.status(200).json({
+      success: true,
+      message: 'Fetched news from database',
+      data: results,
+    });
+  } catch (error) {
+    console.error('Error in /search-db-news:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error searching database news',
+      error: error.message,
+    });
+  }
+});
+
+// NFT fetch endpoint
+app.get('/nfts', async (req, res) => {
+  const { collection, tokenId } = req.query;
+  try {
+    const response = await axios.get('https://api.opensea.io/api/v1/assets', {
+      params: {
+        collection,
+        token_ids: tokenId,
+      },
+      headers: {
+        'X-API-KEY': process.env.OPENSEA_API_KEY,
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      },
+      timeout: 10000,
+    });
+    const nfts = response.data.assets;
+    const db = await connectToDatabase();
+    const nftCollection = db.collection('nfts');
+    if (nfts.length > 0) {
+      const formattedNfts = nfts.map((nft) => ({
+        token_id: nft.token_id,
+        name: nft.name || 'Unnamed NFT',
+        collection: nft.collection?.slug || collection,
+        image_url: nft.image_url || 'https://placehold.co/300x300?text=NFT',
+        description: nft.description || 'No description available',
+        owner: nft.owner?.address || 'Unknown',
+        last_sale: nft.last_sale || null,
+      }));
+      await nftCollection.insertMany(formattedNfts, { ordered: false });
+    }
+    res.status(200).json({ success: true, data: nfts });
+  } catch (error) {
+    console.error('Error in /nfts:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch NFTs',
+      error: error.message,
+    });
+  }
+});
+
 // Blogs endpoint
 app.get('/blogs', (req, res) => {
   const blogs = [
     {
       title: 'Comprehensive Guide To Crafting A Metaverse Avatar',
-      description: 'In the fascinating realm of the metaverse, crafting a digital avatar is key to translating your virtual identity...',
+      description:
+        'In the fascinating realm of the metaverse, crafting a digital avatar is key to translating your virtual identity...',
       author: 'Contributor Author',
       date: 'April 16, 2024',
       image: 'https://placehold.co/300x200?text=Metaverse',
@@ -351,6 +505,7 @@ app.get('/check-oplog', async (req, res) => {
     const stats = await db.collection('oplog.rs').stats();
     res.status(200).json({ success: true, oplogSize: stats.size / (1024 * 1024) + ' MB' });
   } catch (error) {
+    console.error('Error in /check-oplog:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -368,7 +523,7 @@ app.get('/clear-old-rss', async (req, res) => {
     }
     res.status(200).json({ success: true, message: 'Cleared old RSS data' });
   } catch (error) {
-    console.error('Error clearing old data:', error.message);
+    console.error('Error in /clear-old-rss:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -384,7 +539,7 @@ app.get('/backup-rss', async (req, res) => {
     }
     res.status(200).json({ success: true, data: backup });
   } catch (error) {
-    console.error('Backup error:', error.message);
+    console.error('Error in /backup-rss:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -405,10 +560,13 @@ app.post('/', async (req, res) => {
     const result = await collection.insertMany(jsonData, { ordered: false });
     res.json({ success: true, insertedCount: result.insertedCount, data: jsonData });
   } catch (error) {
-    console.error('Error saving RSS data to MongoDB:', error.message);
+    console.error('Error in /:', error.message);
     res.status(500).json({ error: 'An error occurred while processing the feeds.', details: error.message });
   }
 });
+
+// Mount posts routes
+app.use('/posts', postRoutes);
 
 // Helper functions
 async function fetchRssToJson(urls) {
@@ -421,8 +579,9 @@ async function fetchRssToJson(urls) {
     try {
       const response = await axios.get(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Accept': 'application/rss+xml, application/xml, text/xml',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          Accept: 'application/rss+xml, application/xml, text/xml',
         },
         timeout: 10000,
       });
