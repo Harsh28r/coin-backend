@@ -6,6 +6,10 @@ import axios from 'axios';
 import xml2js from 'xml2js';
 import crypto from 'crypto';
 import postRoutes from './routers/postRoute.js';
+import authRoutes from './routers/authRoutes.js';
+import arbitrageRoutes from './routers/arbitrageRoutes.js';
+import triangularRoutes from './routers/triangularRoutes.js';
+import { initializeScannerJobs } from './jobs/scannerJob.js';
 
 dotenv.config();
 
@@ -568,6 +572,11 @@ app.post('/', async (req, res) => {
 // Mount posts routes
 app.use('/posts', postRoutes);
 
+// Mount arbitrage platform routes
+app.use('/auth', authRoutes);
+app.use('/arbitrage', arbitrageRoutes);
+app.use('/triangular', triangularRoutes);
+
 // Helper functions
 async function fetchRssToJson(urls) {
   const jsonResults = [];
@@ -652,6 +661,10 @@ app.listen(PORT, async () => {
   try {
     await connectToDatabase();
     console.log(`Server is running on http://localhost:${PORT}`);
+
+    // Initialize arbitrage scanner cron jobs
+    initializeScannerJobs();
+    console.log('Arbitrage platform initialized successfully');
   } catch (error) {
     console.error('Failed to start server:', error.message);
     process.exit(1);
