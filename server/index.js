@@ -46,7 +46,14 @@ async function connectToDatabase() {
 // CORS configuration
 app.use(
   cors({
-    origin: ['http://localhost:3000', 'https://coin-q86peu5id-harsh28rs-projects.vercel.app','https://coin-harsh28rs-projects.vercel.app'],
+    origin: [
+      'http://localhost:3000',
+      'https://coin-q86peu5id-harsh28rs-projects.vercel.app',
+      'https://coin-harsh28rs-projects.vercel.app',
+      'https://www.coinsclarity.com',
+      'https://coinsclarity.com',
+      'https://camify.fun.coinsclarity.com',
+    ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
